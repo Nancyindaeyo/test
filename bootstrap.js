@@ -224,7 +224,7 @@ async function loadAndInitExtensionMode() {
       registerPresetMemoScript({ quiet: true });
       return;
     }
-    mod.initPresetMemo({ mode: 'extension' });
+    mod.initPresetMemo({ mode: 'extension', extensionId: EXT_FOLDER });
     if (PM_DIRECT_LOAD) {
       unregisterPresetMemoScript();
     }

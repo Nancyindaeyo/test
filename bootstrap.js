@@ -1,4 +1,17 @@
-const EXT_FOLDER = 'PresetWorldBookTransfer';
+/** 从 bootstrap 自身 URL 推断 ST 安装目录名（如 test、PresetWorldBookTransfer） */
+function getExtensionFolder() {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.url) {
+      const match = import.meta.url.match(/\/third-party\/([^/]+)\//);
+      if (match) return match[1];
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'PresetWorldBookTransfer';
+}
+
+const EXT_FOLDER = getExtensionFolder();
 const SCRIPT_NAME = '预设备忘录';
 const SCRIPT_ID = 'preset-worldbook-transfer';
 const EXT_SCRIPT_IMPORT = `/scripts/extensions/third-party/${EXT_FOLDER}/index.js`;
@@ -8,10 +21,10 @@ const MAX_ATTEMPTS = 60;
 const RETRY_MS = 500;
 
 /**
- * false = 现架构（注册 TH 脚本）；true = 扩展直载 index.js（去脚本化）
- * 内测时改为 true，见 docs/MIGRATION-PLAN.md 阶段 3
+ * false = 注册 TH 脚本；true = 扩展直载 index.js（不在脚本树出现条目）
+ * 回退：直载失败时仍会 registerPresetMemoScript
  */
-const PM_DIRECT_LOAD = false;
+const PM_DIRECT_LOAD = true;
 
 function hasShownRegisterToast() {
   try {
@@ -60,8 +73,13 @@ function isTavernHelperReady() {
 function isManagedScript(script) {
   const content = script.content ?? '';
   if (script.id === SCRIPT_ID) return true;
-  if (script.name === SCRIPT_NAME && content.includes(EXT_SCRIPT_IMPORT)) return true;
-  return content.includes(EXT_SCRIPT_IMPORT);
+  if (script.name !== SCRIPT_NAME) return false;
+  if (!content.trim()) return true;
+  return (
+    content.includes('PresetWorldBookTransfer') ||
+    content.includes(`third-party/${EXT_FOLDER}/index.js`) ||
+    /third-party\/[^/]+\/index\.js/.test(content)
+  );
 }
 
 /** @param {import('@types/function/script').ScriptTree[]} trees */

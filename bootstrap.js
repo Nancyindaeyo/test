@@ -69,6 +69,52 @@ function isTavernHelperReady() {
   return typeof getThFn('updateScriptTreesWith') === 'function';
 }
 
+/** 扩展直载：把 TavernHelper / SillyTavern 事件 API 挂到 window（等同 TH 脚本 iframe 环境） */
+function installThGlobalsOnWindow() {
+  const w = window;
+  const th = w.TavernHelper;
+  if (!th || typeof th !== 'object') return false;
+
+  let installed = 0;
+  for (const key of Object.keys(th)) {
+    const val = th[key];
+    if (typeof val !== 'function') continue;
+    if (typeof w[key] === 'function') continue;
+    w[key] = val.bind(th);
+    installed += 1;
+  }
+
+  const st = w.SillyTavern;
+  if (st?.eventSource) {
+    const es = st.eventSource;
+    const pairs = [
+      ['eventOn', 'on'],
+      ['eventOnce', 'once'],
+      ['eventMakeFirst', 'makeFirst'],
+      ['eventMakeLast', 'makeLast'],
+      ['eventRemoveListener', 'removeListener'],
+      ['eventEmit', 'emit'],
+      ['eventEmitAndWait', 'emitAndWait'],
+    ];
+    for (const [globalName, sourceName] of pairs) {
+      const fn = es[sourceName];
+      if (typeof fn === 'function' && typeof w[globalName] !== 'function') {
+        w[globalName] = fn.bind(es);
+        installed += 1;
+      }
+    }
+  }
+  if (st?.eventTypes && w.tavern_events == null) {
+    w.tavern_events = st.eventTypes;
+    installed += 1;
+  }
+
+  if (installed > 0) {
+    console.info(`[预设备忘录] bootstrap 已安装 ${installed} 个 TH 全局 API`);
+  }
+  return installed > 0 || typeof w.insertOrAssignVariables === 'function';
+}
+
 /** @param {import('@types/function/script').Script} script */
 function isManagedScript(script) {
   const content = script.content ?? '';
@@ -217,7 +263,11 @@ function registerPresetMemoScript(options = {}) {
 
 async function loadAndInitExtensionMode() {
   try {
+    installThGlobalsOnWindow();
     const mod = await import(`./index.js`);
+    if (typeof mod.installTavernHelperGlobals === 'function') {
+      mod.installTavernHelperGlobals();
+    }
     if (typeof mod.initPresetMemo !== 'function') {
       console.error('[预设备忘录] index.js 缺少 initPresetMemo，回退脚本注册');
       console.info('[预设备忘录] runtime=fallback-register');

@@ -69,13 +69,32 @@ function isTavernHelperReady() {
   return typeof getThFn('updateScriptTreesWith') === 'function';
 }
 
-/** 扩展直载：把 TavernHelper / SillyTavern 事件 API 挂到 window（等同 TH 脚本 iframe 环境） */
+/** 扩展直载：把 TavernHelper / SillyTavern 事件 API 挂到 window */
 function installThGlobalsOnWindow() {
   const w = window;
   const th = w.TavernHelper;
   if (!th || typeof th !== 'object') return false;
 
+  const CORE = [
+    'getVariables',
+    'insertOrAssignVariables',
+    'getWorldbookNames',
+    'getPresetNames',
+    'getPreset',
+    'getWorldbook',
+    'updateScriptTreesWith',
+    'getScriptTrees',
+    'triggerSlash',
+  ];
+
   let installed = 0;
+  for (const name of CORE) {
+    const val = th[name];
+    if (typeof val === 'function' && typeof w[name] !== 'function') {
+      w[name] = val.bind(th);
+      installed += 1;
+    }
+  }
   for (const key of Object.keys(th)) {
     const val = th[key];
     if (typeof val !== 'function') continue;
@@ -84,7 +103,17 @@ function installThGlobalsOnWindow() {
     installed += 1;
   }
 
-  const st = w.SillyTavern;
+  const findSt = () => {
+    for (const win of [w, w.parent, w.top].filter(Boolean)) {
+      try {
+        if (win?.SillyTavern) return win.SillyTavern;
+      } catch {
+        /* ignore */
+      }
+    }
+    return w.SillyTavern;
+  };
+  const st = findSt();
   if (st?.eventSource) {
     const es = st.eventSource;
     const pairs = [
@@ -108,11 +137,15 @@ function installThGlobalsOnWindow() {
     w.tavern_events = st.eventTypes;
     installed += 1;
   }
+  if (typeof w.getExtensionInstallationInfo !== 'function' && typeof th.getExtensionStatus === 'function') {
+    w.getExtensionInstallationInfo = th.getExtensionStatus.bind(th);
+    installed += 1;
+  }
 
   if (installed > 0) {
     console.info(`[预设备忘录] bootstrap 已安装 ${installed} 个 TH 全局 API`);
   }
-  return installed > 0 || typeof w.insertOrAssignVariables === 'function';
+  return CORE.every(name => typeof w[name] === 'function');
 }
 
 /** @param {import('@types/function/script').Script} script */

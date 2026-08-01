@@ -1,368 +1,129 @@
-/** 从 bootstrap 自身 URL 推断 ST 安装目录名（如 test、PresetWorldBookTransfer） */
-function getExtensionFolder() {
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.url) {
-      const match = import.meta.url.match(/\/third-party\/([^/]+)\//);
-      if (match) return match[1];
-    }
-  } catch {
-    /* ignore */
-  }
-  return 'PresetWorldBookTransfer';
-}
-
-const EXT_FOLDER = getExtensionFolder();
-const SCRIPT_NAME = '预设备忘录';
-const SCRIPT_ID = 'preset-worldbook-transfer';
-const EXT_SCRIPT_IMPORT = `/scripts/extensions/third-party/${EXT_FOLDER}/index.js`;
-const PM_SINGLETON_KEY = '__presetMemoSingletonCleanup';
-const REGISTER_TOAST_KEY = 'PresetWorldBookTransfer:register-toast-shown';
-const MAX_ATTEMPTS = 60;
-const RETRY_MS = 500;
-
-/**
- * false = 注册 TH 脚本；true = 扩展直载 index.js（不在脚本树出现条目）
- * 回退：直载失败时仍会 registerPresetMemoScript
- */
-const PM_DIRECT_LOAD = true;
-
-function hasShownRegisterToast() {
-  try {
-    return localStorage.getItem(REGISTER_TOAST_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function markRegisterToastShown() {
-  try {
-    localStorage.setItem(REGISTER_TOAST_KEY, '1');
-  } catch {
-    /* ignore */
-  }
-}
-
-function clearRegisterToastShown() {
-  try {
-    localStorage.removeItem(REGISTER_TOAST_KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
-/** @returns {Record<string, Function> | null} */
-function getTavernHelper() {
-  const th = window.TavernHelper;
-  if (!th || typeof th !== 'object') return null;
-  return th;
-}
-
-function getThFn(name) {
-  const th = getTavernHelper();
-  if (th && typeof th[name] === 'function') return th[name].bind(th);
-  const globalFn = window[name];
-  if (typeof globalFn === 'function') return globalFn;
-  return null;
-}
-
-function isTavernHelperReady() {
-  return typeof getThFn('updateScriptTreesWith') === 'function';
-}
-
-/** 扩展直载：把 TavernHelper / SillyTavern 事件 API 挂到 window */
-function installThGlobalsOnWindow() {
-  const w = window;
-  const th = w.TavernHelper;
-  if (!th || typeof th !== 'object') return false;
-
-  const CORE = [
-    'getVariables',
-    'insertOrAssignVariables',
-    'getWorldbookNames',
-    'getPresetNames',
-    'getPreset',
-    'getWorldbook',
-    'updateScriptTreesWith',
-    'getScriptTrees',
-    'triggerSlash',
-  ];
-
-  let installed = 0;
-  for (const name of CORE) {
-    const val = th[name];
-    if (typeof val === 'function' && typeof w[name] !== 'function') {
-      w[name] = val.bind(th);
-      installed += 1;
-    }
-  }
-  for (const key of Object.keys(th)) {
-    const val = th[key];
-    if (typeof val !== 'function') continue;
-    if (typeof w[key] === 'function') continue;
-    w[key] = val.bind(th);
-    installed += 1;
-  }
-
-  const findSt = () => {
-    for (const win of [w, w.parent, w.top].filter(Boolean)) {
-      try {
-        if (win?.SillyTavern) return win.SillyTavern;
-      } catch {
-        /* ignore */
-      }
-    }
-    return w.SillyTavern;
-  };
-  const st = findSt();
-  if (st?.eventSource) {
-    const es = st.eventSource;
-    const pairs = [
-      ['eventOn', 'on'],
-      ['eventOnce', 'once'],
-      ['eventMakeFirst', 'makeFirst'],
-      ['eventMakeLast', 'makeLast'],
-      ['eventRemoveListener', 'removeListener'],
-      ['eventEmit', 'emit'],
-      ['eventEmitAndWait', 'emitAndWait'],
-    ];
-    for (const [globalName, sourceName] of pairs) {
-      const fn = es[sourceName];
-      if (typeof fn === 'function' && typeof w[globalName] !== 'function') {
-        w[globalName] = fn.bind(es);
-        installed += 1;
-      }
-    }
-  }
-  if (st?.eventTypes && w.tavern_events == null) {
-    w.tavern_events = st.eventTypes;
-    installed += 1;
-  }
-  if (typeof w.getExtensionInstallationInfo !== 'function' && typeof th.getExtensionStatus === 'function') {
-    w.getExtensionInstallationInfo = th.getExtensionStatus.bind(th);
-    installed += 1;
-  }
-
-  if (installed > 0) {
-    console.info(`[预设备忘录] bootstrap 已安装 ${installed} 个 TH 全局 API`);
-  }
-  return CORE.every(name => typeof w[name] === 'function');
-}
-
-/** @param {import('@types/function/script').Script} script */
-function isManagedScript(script) {
-  const content = script.content ?? '';
-  if (script.id === SCRIPT_ID) return true;
-  if (script.name !== SCRIPT_NAME) return false;
-  if (!content.trim()) return true;
-  return (
-    content.includes('PresetWorldBookTransfer') ||
-    content.includes(`third-party/${EXT_FOLDER}/index.js`) ||
-    /third-party\/[^/]+\/index\.js/.test(content)
-  );
-}
-
-/** @param {import('@types/function/script').ScriptTree[]} trees */
-function removeManagedScriptsFromTrees(trees) {
-  return trees.flatMap(node => {
-    if (node.type === 'script') {
-      return isManagedScript(node) ? [] : [node];
-    }
-    return [
+[
+  {
+    "version": "6.5.9",
+    "title": "库清理",
+    "sections": [
       {
-        ...node,
-        scripts: (node.scripts ?? []).filter(script => !isManagedScript(script)),
+        "title": "新功能",
+        "items": [
+          "新增「库清理」选项卡：分别浏览全部预设与世界书",
+          "世界书默认未绑定优先，可筛选「仅未绑定」；展示绑定角色卡与使用中状态（全局 / 当前角色 / 聊天）",
+          "预设列表标记当前加载中的预设；点击可只读查看条目全文",
+          "支持勾选后批量删除预设或世界书，删除前强确认，世界书会提示绑定情况"
+        ]
+      }
+    ]
+  },
+  {
+    "version": "6.5.8",
+    "title": "兼容片段管理器文件夹",
+    "sections": [
+      {
+        "title": "兼容性",
+        "items": [
+          "修复与其他脚本的兼容bug，不再把片段管理器的 object 型 folders 误识别为预设备忘录数据并合并",
+          "读取/写入时自动清洗已污染的文件夹列表，仅保留字符串文件夹名"
+        ]
+      }
+    ]
+  },
+  {
+    "version": "6.5.7",
+    "title": "界面微调",
+    "sections": [
+      {
+        "title": "主题与配色",
+        "items": [
+          "确认/取消按钮紧贴「补充微调」下方，不再沉底留白",
+          "选择「酒馆」配色时面板高度随内容收缩，去除下方大块空白",
+          "「补充微调」与自定义「微调」配色列表仍可在区域内独立滚动",
+          "非「酒馆」预设的微调列表改为纵向布局，修复标签与取色器重叠"
+        ]
       },
-    ];
-  });
-}
-
-/** @param {import('@types/function/script').ScriptTree[]} trees */
-function disableManagedScriptsInTrees(trees) {
-  return trees.map(node => {
-    if (node.type === 'script') {
-      if (!isManagedScript(node)) return node;
-      return { ...node, enabled: false };
-    }
-    return {
-      ...node,
-      scripts: (node.scripts ?? []).map(script => (isManagedScript(script) ? { ...script, enabled: false } : script)),
-    };
-  });
-}
-
-function forEachScriptScope(run) {
-  for (const scope of ['global', 'preset', 'character']) {
-    try {
-      run(scope);
-    } catch (e) {
-      console.warn(`[预设备忘录] 脚本树操作失败 (${scope})`, e);
-    }
+      {
+        "title": "CoT 拼装预览",
+        "items": [
+          "条目标题改为胶囊样式，默认「全部折叠」仅显示标题，可逐条展开",
+          "展开条目后 setvar/addvar/incvar 显示完整宏原文，不再截断为「N 字」摘要",
+          "同名变量按拼装顺序建立 set/get 时间线；点击 setvar 或 getvar 从当前处开始浏览",
+          "「下一处」沿时间线循环，包含中间的同名 setvar，不会跳过",
+          "无 get 的 setvar 标灰不可点；孤儿 get 标红、顺序错误标橙、语法问题波浪红线下划线",
+          "语法检测含：缺闭合 }}、变量值内嵌套 {{user}} 等宏、括号不匹配",
+          "跳转条支持「下一处」「查看/回到 set」"
+        ]
+      }
+    ]
+  },
+  {
+    "version": "6.5.6",
+    "title": "迁移指引与合并记录",
+    "sections": [
+      {
+        "title": "迁移记录（卷轴图标）",
+        "items": [
+          "标题栏卷轴图标可打开「更新日志 / 迁移记录」双 Tab 面板",
+          "完成首次迁移后「迁移记录」Tab 常驻，可随时查看脚本→扩展的合并明细",
+          "展示从脚本并入、重叠跳过（同 id 只保留一条）、扩展原有、文件夹与其他设置",
+          "再次启用脚本并打开面板时，若脚本侧有新数据会自动增量合并至扩展；若无新数据但脚本仍启用，也会刷新迁移记录时间"
+        ]
+      },
+      {
+        "title": "数据合并",
+        "items": [
+          "扩展首次迁移改为按条目 id 合并，重叠 id 跳过重复、非重叠并入扩展，避免备忘丢失",
+          "迁移前写入 global 备份，并在扩展变量中持久化合并报告供日后核对",
+          "打开面板时在关闭脚本前检测脚本变量，有增量则合并并刷新报告（无增量且脚本启用则仅更新时间）"
+        ]
+      },
+      {
+        "title": "脚本并存",
+        "items": [
+          "检测到非扩展版脚本启用时会自动关闭，并提示刷新或清理脚本树中的禁用条目",
+          "新安装扩展也会显示欢迎说明，无需在「酒馆助手 → 脚本」中启用任何条目"
+        ]
+      },
+      {
+        "title": "更新体验",
+        "items": ["「有更新」弹窗会从 GitHub 远程读取 changelog，更新前也能看到目标版本说明"]
+      }
+    ]
+  },
+  {
+    "version": "6.5.5",
+    "title": "修复与改进",
+    "sections": [
+      {
+        "title": "CoT 预览",
+        "items": ["修复扩展直载模式下 CoT 预览报错 `builtin is not defined`（无法 dry-run 时自动回退静态预览）"]
+      }
+    ]
+  },
+  {
+    "version": "6.5.3",
+    "title": "扩展彻底迁移",
+    "sections": [
+      {
+        "title": "无需酒馆助手脚本",
+        "items": [
+          "扩展由 bootstrap 直载运行，不再在「酒馆助手 → 脚本」中注册「预设备忘录」条目",
+          "若直载失败，才会临时回退为脚本注册（一般不会出现）"
+        ]
+      },
+      {
+        "title": "旧脚本与数据",
+        "items": [
+          "首次启用扩展时会自动合并旧脚本 / 历史扩展桶 / 全局备份中的备忘、文件夹、主题等",
+          "若检测到旧脚本仍启用，更新或刷新后会自动关闭；脚本树中的禁用条目可手动删除"
+        ]
+      },
+      {
+        "title": "更新体验",
+        "items": [
+          "点击「有更新」可查看本更新说明，底部提供「关闭 / 更新」",
+          "在酒馆「扩展」面板手动更新后，也会自动刷新页面加载新版本",
+          "版本号旁小图标可随时查看更新说明"
+        ]
+      }
+    ]
   }
-}
-
-function unregisterPresetMemoScript() {
-  const updateScriptTreesWith = getThFn('updateScriptTreesWith');
-  if (!updateScriptTreesWith) return;
-
-  forEachScriptScope(scope => {
-    updateScriptTreesWith(trees => removeManagedScriptsFromTrees(trees), { type: scope });
-  });
-}
-
-function disablePresetMemoScript() {
-  const updateScriptTreesWith = getThFn('updateScriptTreesWith');
-  if (!updateScriptTreesWith) return;
-
-  forEachScriptScope(scope => {
-    updateScriptTreesWith(trees => disableManagedScriptsInTrees(trees), { type: scope });
-  });
-}
-
-function cleanupPresetMemoViaSingleton() {
-  const cleanup = window[PM_SINGLETON_KEY];
-  if (typeof cleanup === 'function') {
-    try {
-      cleanup();
-    } catch (e) {
-      console.warn('[预设备忘录] cleanupPresetMemo 失败', e);
-    }
-  }
-}
-
-function cleanupExtensionDom() {
-  jQuery(
-    '#preset-memo-btn, #preset-memo-ext-menu-btn, #preset-memo-modal, #preset-memo-style, #preset-memo-ext-menu-btn-legacy, #preset_memo_wand_container, #preset-memo-mobile-launcher',
-  ).remove();
-  jQuery(document.documentElement).removeClass('pm-modal-body-lock');
-  jQuery(document.body).removeClass('pm-modal-body-lock');
-
-  cleanupPresetMemoViaSingleton();
-  delete window[PM_SINGLETON_KEY];
-}
-
-function registerPresetMemoScript(options = {}) {
-  const { quiet = false } = options;
-  const updateScriptTreesWith = getThFn('updateScriptTreesWith');
-  if (!updateScriptTreesWith) return false;
-
-  const scriptContent = `import '${EXT_SCRIPT_IMPORT}'`;
-  let created = false;
-
-  updateScriptTreesWith(
-    trees => {
-      let found = false;
-      const next = trees.map(item => {
-        if (item.type !== 'script') return item;
-        if (item.id !== SCRIPT_ID && item.name !== SCRIPT_NAME) return item;
-        found = true;
-        return {
-          ...item,
-          id: SCRIPT_ID,
-          name: SCRIPT_NAME,
-          enabled: item.enabled !== false,
-          content: scriptContent,
-        };
-      });
-
-      if (found) return next;
-
-      created = true;
-      return [
-        ...next,
-        {
-          type: 'script',
-          enabled: true,
-          id: SCRIPT_ID,
-          name: SCRIPT_NAME,
-          content: scriptContent,
-          info: '世界书与预设互转、备忘录、变量检查等工具。',
-          button: { enabled: false, buttons: [] },
-          data: {},
-          export_with: { data: true, button: true },
-        },
-      ];
-    },
-    { type: 'global' },
-  );
-
-  const shouldNotify = !quiet && !hasShownRegisterToast() && created;
-  if (shouldNotify) {
-    console.info('[预设备忘录] 已在酒馆助手中注册脚本');
-    toastr.success('已在酒馆助手中注册脚本，若未出现入口请刷新页面', SCRIPT_NAME);
-    markRegisterToastShown();
-  }
-  return true;
-}
-
-async function loadAndInitExtensionMode() {
-  try {
-    installThGlobalsOnWindow();
-    const mod = await import(`./index.js`);
-    if (typeof mod.installTavernHelperGlobals === 'function') {
-      mod.installTavernHelperGlobals();
-    }
-    if (typeof mod.initPresetMemo !== 'function') {
-      console.error('[预设备忘录] index.js 缺少 initPresetMemo，回退脚本注册');
-      console.info('[预设备忘录] runtime=fallback-register');
-      registerPresetMemoScript({ quiet: true });
-      return;
-    }
-    mod.initPresetMemo({ mode: 'extension', extensionId: EXT_FOLDER });
-    if (PM_DIRECT_LOAD) {
-      unregisterPresetMemoScript();
-    }
-  } catch (e) {
-    console.error('[预设备忘录] 直载失败，回退脚本注册', e);
-    console.info('[预设备忘录] runtime=fallback-register');
-    registerPresetMemoScript({ quiet: true });
-  }
-}
-
-function onTavernHelperReady() {
-  if (PM_DIRECT_LOAD) {
-    void loadAndInitExtensionMode();
-    return;
-  }
-  registerPresetMemoScript();
-}
-
-function waitForTavernHelper(attempt = 0) {
-  if (isTavernHelperReady()) {
-    onTavernHelperReady();
-    return;
-  }
-
-  if (attempt >= MAX_ATTEMPTS) {
-    toastr.warning('未检测到酒馆助手接口。请确认已安装并启用「酒馆助手」，然后刷新页面。', SCRIPT_NAME);
-    return;
-  }
-
-  setTimeout(() => waitForTavernHelper(attempt + 1), RETRY_MS);
-}
-
-export async function onDelete() {
-  unregisterPresetMemoScript();
-  cleanupExtensionDom();
-  clearRegisterToastShown();
-}
-
-export async function onDisable() {
-  if (PM_DIRECT_LOAD) {
-    cleanupPresetMemoViaSingleton();
-  } else {
-    disablePresetMemoScript();
-  }
-  cleanupExtensionDom();
-}
-
-export async function onEnable() {
-  if (PM_DIRECT_LOAD) {
-    waitForTavernHelper();
-    return;
-  }
-  registerPresetMemoScript({ quiet: true });
-}
-
-jQuery(() => {
-  waitForTavernHelper();
-});
+]
